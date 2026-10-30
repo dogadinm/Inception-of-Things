@@ -1,0 +1,10 @@
+login: mdogadin
+
+box_name: almalinux/10-x86_64_v2
+box_url: https://almalinux-cloud.s3.us-east-1.amazonaws.com/vagrant/almalinux/10-x86_64_v2.json
+box_version: 10.2.20261012
+k3s_version: v1.36.5+k3s1
+
+cpus: 1
+server_memory: 2048
+agent_memory: 1024

@@ -1,0 +1,65 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+require "yaml"
+require "fileutils"
+require "securerandom"
+require "rbconfig"
+
+root = File.expand_path(__dir__)
+lab = YAML.safe_load(File.read(File.join(root, "confs/lab.yml")))
+login = lab.fetch("login")
+unless login.is_a?(String) && login.match?(/\A[a-z][a-z0-9-]{0,59}\z/)
+  abort "confs/lab.yml: login must start with a lowercase letter and contain only a-z, 0-9 or -."
+end
+
+if (ARGV & %w[up resume reload provision]).any? &&
+   !(RbConfig::CONFIG["host_os"].match?(/linux/) && RbConfig::CONFIG["host_cpu"].match?(/x86_64|amd64/))
+  abort "This lab targets Linux x86_64 with VirtualBox. Use the school computer to run it."
+end
+
+# Upload one random join secret over SSH to both guests. No shared folders,
+# hardcoded token, host absolute paths or Guest Additions are required.
+runtime = File.join(root, ".runtime")
+FileUtils.mkdir_p(runtime, mode: 0700)
+token = File.join(runtime, "cluster-token")
+unless File.exist?(token)
+  File.open(token, File::WRONLY | File::CREAT | File::EXCL, 0600) do |file|
+    file.puts SecureRandom.hex(32)
+  end
+end
+File.chmod(0700, runtime)
+File.chmod(0600, token)
+
+ENV["VAGRANT_DEFAULT_PROVIDER"] = "virtualbox"
+
+Vagrant.configure("2") do |config|
+  config.vm.box = lab.fetch("box_name")
+  config.vm.box_url = lab.fetch("box_url")
+  config.vm.box_version = lab.fetch("box_version")
+  config.vm.boot_timeout = 600
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+  config.ssh.insert_key = true
+
+  [
+    { suffix: "S", role: "server", ip: "192.168.56.110", memory: lab.fetch("server_memory") },
+    { suffix: "SW", role: "agent", ip: "192.168.56.111", memory: lab.fetch("agent_memory") }
+  ].each do |node|
+    name = "#{login}#{node[:suffix]}"
+    config.vm.define name do |machine|
+      machine.vm.hostname = name
+      machine.vm.network "private_network", ip: node[:ip], netmask: "255.255.255.0"
+      machine.vm.provider "virtualbox" do |vb|
+        vb.name = "p1-#{name}"
+        vb.gui = false
+        vb.cpus = lab.fetch("cpus")
+        vb.memory = node[:memory]
+      end
+
+      machine.vm.provision "file", source: token, destination: "/tmp/iot-cluster-token"
+      machine.vm.provision "shell", path: "scripts/provision.sh",
+        args: [node[:role], node[:ip], name.downcase, lab.fetch("k3s_version")],
+        privileged: true
+    end
+  end
+end
