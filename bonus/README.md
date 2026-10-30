@@ -1,205 +1,223 @@
-# Bonus — локальный GitLab для Part 3
+# Bonus — локальный GitLab для Argo CD
 
-## Назначение
+## Что показать по eval sheet
 
-Bonus расширяет Part 3 локальным GitLab:
+После полностью рабочей обязательной части:
 
-- GitLab работает внутри Kubernetes;
-- используется отдельный namespace `gitlab`;
-- GitLab подключён к кластеру;
-- Argo CD получает GitOps-репозиторий из локального GitLab;
-- приложение из Part 3 продолжает работать через `localhost:8888`.
+1. GitLab работает локально в namespace `gitlab`.
+2. Можно войти в веб-интерфейс, создать репозиторий и добавить файлы.
+3. Argo CD читает GitOps-конфигурацию из локального GitLab.
+4. Приложение сначала отвечает v1, после commit/push в GitLab — v2.
 
-Эта часть предполагает, что Part 3 уже полностью исправна: работают Docker,
-K3d и Argo CD, а кластер называется `iot`. Bonus не заменяет обязательную
-часть и не должен запускаться до успешного выполнения `p3/scripts/check.sh`.
+## Компактная архитектура
 
-## Архитектура
+Используется официальный образ GitLab CE `gitlab/gitlab-ce:19.5.3-ce.0`,
+последний стабильный релиз на 30 октября 2026. Перед более поздней защитой
+проверить актуальную версию и обновить `GITLAB_IMAGE` в конфигурации.
+Задание не требует Helm: на ноутбуке с 8 ГБ RAM используется один StatefulSet
+вместо многокомпонентного Helm chart.
 
 ```text
 K3d
-├── gitlab       GitLab CE, PostgreSQL, Redis, webservice
-├── argocd       Argo CD, repository Secret, Application
-└── dev          wil-playground
+├── argocd: Argo CD
+├── dev: wil-playground, Service, Ingress
+└── gitlab: gitlab-0, Service, Ingress, PVC, Secret, ConfigMap
 ```
 
-GitLab устанавливается официальным Helm chart `gitlab/gitlab`. Для учебного
-кластера отключены необязательные registry, Prometheus, Grafana, cert-manager
-и GitLab Runner. Используется существующий Traefik K3d.
+Внутри gitlab-0 работают GitLab Rails/Puma, Sidekiq, Gitaly, PostgreSQL,
+Redis и Nginx. `confs/gitlab.rb` уменьшает ресурсы: один процесс Puma,
+пять потоков Sidekiq, PostgreSQL shared_buffers 128 МБ, отключены мониторинг,
+registry и KAS. Для pod запрошено 1536 МБ, предел 4 ГБ RAM и 2 CPU.
+Это настройки небольшой учебной установки, не гарантированный расход памяти.
+Скрипт не меняет swap и ресурсы остальных приложений.
 
-GitLab и приложение используют один внешний порт `8888`, но разные HTTP Host:
+Данные, логи и конфигурация сохраняются на PVC 30 ГБ. В K3d default local-path
+хранит их внутри Docker-узла: удаление всего кластера удалит и эти данные.
 
-- обычный запрос `http://localhost:8888/` попадает в приложение;
-- `Host: gitlab.local` попадает в GitLab.
+Порт один — 8888, Traefik выбирает приложение по Host:
 
-## Установка
+- http://gitlab.local:8888/ → GitLab;
+- http://localhost:8888/ → приложение из dev.
 
-Убедитесь, что Part 3 уже запущена:
+## Подготовка и запуск
 
-```sh
-kubectl get nodes
-k3d cluster list
-kubectl -n argocd get pods
-```
+Нужна рабочая p3: Docker, K3d, kubectl, curl, jq и кластер `iot`.
+Helm для этого варианта не требуется. На машине должны быть свободные ресурсы
+для GitLab и не менее 30 ГБ свободного диска. Остановить VM p1/p2.
 
-Подготовьте настройки:
+Из корня проекта:
 
 ```sh
 cd bonus
 cp confs/lab.env.example confs/lab.env
+nano confs/lab.env
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+bash scripts/install.sh
 ```
 
-Основные параметры:
+Устанавливать можно от обычного пользователя с доступом к Docker и кластеру.
+Первый запуск скачивает большой образ, разворачивает GitLab, настраивает базу
+и может занять 10–20 минут. Скрипт переключает Argo CD только после готовности
+GitLab и создания репозитория.
+
+Пароль root и API-токен генерируются случайно и сохраняются только в Kubernetes
+Secret `gitlab/gitlab-credentials`. API использует токен с ограниченным сроком,
+а не HTTP Basic root/password. Репозиторий публичный внутри локального GitLab,
+поэтому Argo CD читает его без администраторских credentials.
+
+Скрипт создаёт проект `root/inception-of-things`, ветку main и каталог gitops
+с тремя манифестами. При первом создании приложение получает v1.
+Повторная установка добавляет недостающие файлы и сохраняет существующие
+коммиты, включая версию, изменённую на защите.
+
+## Вход в GitLab через браузер
+
+На машине с браузером добавить запись в `/etc/hosts`, если её ещё нет:
 
 ```sh
-K3D_CLUSTER_NAME=iot
-GITLAB_RELEASE=gitlab
-GITLAB_CHART_VERSION=
-GITLAB_PROJECT=inception-of-things
-GITLAB_HOST_PORT=8888
-ARGOCD_NAMESPACE=argocd
+sudo nano /etc/hosts
 ```
-
-Пустой `GITLAB_CHART_VERSION` означает использование актуальной версии
-официального GitLab chart. Для защиты можно заранее зафиксировать конкретную
-версию после проверки совместимости с целевой системой.
-
-Запустите:
-
-```sh
-sudo ./scripts/install.sh
-```
-
-Скрипт проверяет или устанавливает Helm, добавляет официальный Helm repository
-GitLab, создаёт namespace `gitlab`, устанавливает GitLab CE и ждёт
-webservice/sidekiq. Затем он получает пароль `root`, создаёт локальный проект,
-загружает `p3/gitops/deployment.yaml` и `service.yaml`, создаёт repository
-Secret для Argo CD и переключает Application `playground` на локальный GitLab.
-
-Скрипт можно запускать повторно: существующий проект переиспользуется, а
-GitOps-файлы обновляются.
-
-GitLab требует заметно больше RAM, чем обычные части subject. Если Pod
-остаются `Pending` или завершаются с `OOMKilled`, увеличьте память Docker/VM.
-
-## Проверка
-
-```sh
-export KUBECONFIG="$(k3d kubeconfig write iot)"
-./scripts/check.sh
-```
-
-Ручная проверка:
-
-```sh
-kubectl get ns
-kubectl -n gitlab get pods
-kubectl -n argocd get secret gitlab-repository
-kubectl -n argocd get application playground
-kubectl -n dev get pods,service
-curl http://localhost:8888/
-```
-
-Ожидается состояние Argo CD `Synced Healthy`.
-
-Открыть GitLab через curl:
-
-```sh
-curl -H 'Host: gitlab.local' http://127.0.0.1:8888/users/sign_in
-```
-
-Для браузера можно добавить в `/etc/hosts`:
 
 ```text
 127.0.0.1 gitlab.local
 ```
 
-Логин GitLab — `root`. Пароль хранится в Kubernetes Secret:
+Открыть http://gitlab.local:8888/. Логин `root`. Пароль получить:
 
 ```sh
-kubectl -n gitlab get secret gitlab-gitlab-initial-root-password \
-  -o jsonpath='{.data.password}' | base64 --decode; echo
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+kubectl -n gitlab get secret gitlab-credentials -o jsonpath='{.data.root-password}' | base64 --decode
+printf '\n'
 ```
 
-## GitLab и Argo CD
+Пароли и токены не добавлять в Git. Если браузер на другой машине,
+localhost заменить на адрес VM и настроить доступ к порту VM.
 
-Внутри Kubernetes Argo CD использует DNS-адрес GitLab:
+## Показ на защите: GitLab и новый репозиторий
+
+```sh
+kubectl get namespaces argocd dev gitlab
+kubectl -n gitlab get statefulset,pods,services,ingress,pvc
+kubectl -n gitlab exec gitlab-0 -- head -n 1 /opt/gitlab/version-manifest.txt
+```
+
+Ожидаются StatefulSet 1/1, pod gitlab-0 1/1 Running и PVC Bound.
+В браузере:
+
+1. Войти под root.
+2. Открыть New project → Create blank project.
+3. Создать, например, `defense-test` с README в personal namespace root.
+4. Открыть README, нажать Edit, добавить строку и сделать commit.
+5. Показать, что файл и commit появились в репозитории.
+
+Отдельно открыть `root/inception-of-things`, каталог gitops и три файла:
+Deployment, Service и Ingress.
+
+## Показ на защите: локальный GitOps v1 → v2
+
+### 1. Убедиться, что Argo CD читает GitLab
+
+```sh
+kubectl -n argocd get application playground -o jsonpath='{.spec.source.repoURL}{"\n"}{.spec.source.path}{"\n"}'
+```
+
+Ожидается:
 
 ```text
-http://gitlab-webservice-default.gitlab.svc:8181/root/inception-of-things.git
+http://gitlab.gitlab.svc.cluster.local/root/inception-of-things.git
+gitops
 ```
 
-Эта ссылка и credentials записываются в Secret `argocd/gitlab-repository` с
-label `argocd.argoproj.io/secret-type: repository`. Пароль не записывается в
-Git. Application использует `path: gitops`, поэтому локальный проект содержит
-те же manifest-файлы, что и GitHub-репозиторий Part 3.
+Внутреннее имя Service разрешается внутри Kubernetes; на хосте открывать
+http://gitlab.local:8888/root/inception-of-things.
 
-## Проверка GitOps-обновления
-
-Измените в локальном GitLab project файл `gitops/deployment.yaml`:
-
-```yaml
-image: wil42/playground:v1
-```
-
-на:
-
-```yaml
-image: wil42/playground:v2
-```
-
-Создайте commit в ветке `main`. Argo CD автоматически обнаружит изменение:
+### 2. Подтвердить v1
 
 ```sh
-kubectl -n argocd get application playground
-kubectl -n dev rollout status deployment/wil-playground --timeout=120s
-curl http://localhost:8888/
+curl -f http://localhost:8888/
+bash scripts/check.sh iot v1
 ```
 
-Ответ должен содержать сообщение `v2`. Это подтверждает, что GitOps из Part 3
-работает не только с GitHub, но и с локальным GitLab.
+Ответ должен содержать message v1. Если предыдущая проверка оставила v2,
+сначала вернуть v1 коммитом в локальном GitLab и дождаться синхронизации.
 
-## Диагностика
+### 3. Сделать commit в GitLab
+
+В браузере открыть `root/inception-of-things` → `gitops/deployment.yaml` → Edit.
+Заменить `wil42/playground:v1` на `wil42/playground:v2`, сохранить commit
+в ветку main. Файлы GitHub для этого шага не изменять.
+
+Для варианта через git clone/commit/push можно добавить SSH-ключ в GitLab
+или создать Personal Access Token с read_repository/write_repository и
+использовать HTTP URL репозитория; токен вводить как пароль, не сохранять в URL.
+
+### 4. Показать автоматическое обновление
+
+В Argo CD открыть playground и наблюдать новый commit, Synced / Healthy.
+Адрес Argo CD и получение его пароля описаны в ../p3/README.md.
+В терминале:
 
 ```sh
-helm -n gitlab list
-kubectl -n gitlab get pods
-kubectl -n gitlab get ingress
-kubectl -n gitlab logs deploy/gitlab-webservice-default
+kubectl -n argocd get application playground -w
+```
+
+После обновления Ctrl+C, затем:
+
+```sh
+kubectl -n argocd get application playground -o jsonpath='{.status.sync.revision}{" "}{.status.sync.status}{" "}{.status.health.status}{"\n"}'
+kubectl -n dev get deployment wil-playground -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+curl -f http://localhost:8888/
+bash scripts/check.sh iot v2
+```
+
+Ожидаются SHA коммита из GitLab, Synced / Healthy, тег v2 и HTTP message v2.
+Автоматическая проверка дополнительно проверяет, что источник Argo CD именно
+локальный GitLab, а не оставшийся от p3 GitHub.
+
+## Остановка и диагностика
+
+```sh
+kubectl -n gitlab logs gitlab-0 --tail=80
+kubectl -n gitlab describe pod gitlab-0
+kubectl -n gitlab get events --sort-by=.lastTimestamp
 kubectl -n argocd describe application playground
-kubectl -n argocd get secret gitlab-repository -o yaml
+free -h
+docker stats --no-stream
 ```
 
-- **GitLab `Pending`/`OOMKilled`**: увеличьте ресурсы Docker/VM.
-- **Порт не проброшен**: K3d должен быть создан с
-  `--port "8888:80@loadbalancer"`. Иначе пересоздайте кластер этим параметром.
-- **Argo CD `RepoError`**: проверьте Secret и DNS
-  `gitlab-webservice-default.gitlab.svc:8181`.
-- **`OutOfSync`**: проверьте ветку `main` и путь `gitops`.
-- **GitLab не открывается**: используйте Host `gitlab.local` или запись в
-  `/etc/hosts`.
-
-## Удаление
+При OOMKilled, MemoryPressure или сильном торможении остановить GitLab:
 
 ```sh
-helm uninstall gitlab --namespace gitlab
-kubectl delete namespace gitlab
-kubectl -n argocd delete application playground
-kubectl -n argocd delete secret gitlab-repository
+kubectl -n gitlab scale statefulset gitlab --replicas=0
 ```
 
-Namespace `dev`, Argo CD и K3d при этом не удаляются.
-
-## Локальная проверка
+Данные останутся на PVC. Для продолжения на той же машине:
 
 ```sh
-bash -n scripts/install.sh scripts/check.sh
+kubectl -n gitlab scale statefulset gitlab --replicas=1
+kubectl -n gitlab rollout status statefulset/gitlab --timeout=1200s
 ```
 
-На Linux с Helm можно проверить rendering:
+Если памяти не хватает, повторить установку на школьной VM с большим RAM.
+K3d переносится через конфигурации; Docker-узлы и PVC автоматически на другую
+машину не переносятся.
+
+## Вернуться к GitHub/p3
+
+Сначала переключить Application обратно на URL из настроек p3, затем остановить
+GitLab. Из каталога bonus:
 
 ```sh
-helm template gitlab gitlab/gitlab \
-  --namespace gitlab \
-  --values confs/values.yaml
+source ../p3/confs/lab.env
+sed -e "s|REPO_URL_PLACEHOLDER|$GIT_REPO_URL|g" -e "s|REVISION_PLACEHOLDER|$GIT_REPO_REVISION|g" ../p3/confs/argocd-application.yaml.tpl | kubectl apply -f -
+kubectl -n argocd annotate application playground argocd.argoproj.io/refresh=hard --overwrite
 ```
+
+Дождаться Synced / Healthy и ответа приложения, затем остановить GitLab.
+Namespace и PVC удалять только если его данные больше не нужны.
+
+## Официальная документация
+
+- [GitLab в Docker](https://docs.gitlab.com/install/docker/installation/).
+- [GitLab при ограниченной памяти](https://docs.gitlab.com/omnibus/settings/memory_constrained_envs/).
+- [Авторизация REST API](https://docs.gitlab.com/api/rest/authentication/).
