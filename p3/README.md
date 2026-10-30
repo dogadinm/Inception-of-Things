@@ -25,7 +25,7 @@ Git с кластером и применяет изменения автома�
 среду, требуемую subject/eval sheet; локальный запуск на Arch проверяет работу.
 
 В публичном GitHub-репозитории должен быть путь `p3/gitops`, содержащий
-`deployment.yaml` и `service.yaml`. Репозиторий может содержать весь проект.
+`deployment.yaml`, `service.yaml` и `ingress.yaml`. Репозиторий может содержать весь проект.
 SSH-доступ нужен для push; Argo CD читает публичный HTTPS URL без SSH-ключей.
 Не коммитить `.vagrant`, `.runtime`, `confs/lab.env`, пароли и eval sheet.
 
@@ -103,17 +103,21 @@ cat confs/lab.env.example
 cat confs/argocd-application.yaml.tpl
 cat gitops/deployment.yaml
 cat gitops/service.yaml
+cat gitops/ingress.yaml
 k3d cluster list
 docker ps
 kubectl get nodes -o wide
 kubectl get namespaces argocd dev
 kubectl -n argocd get pods
-kubectl -n dev get deployments,pods,services
+kubectl -n dev get deployments,pods,services,ingress
 kubectl -n argocd get application playground
 ```
 
 Ожидается кластер `iot`, узлы Ready, namespaces Active, pod приложения Running,
 Deployment `wil-playground` 1/1, Application `Synced` и `Healthy`.
+Трафик проходит через K3d load balancer → Traefik → Ingress → ClusterIP Service
+→ pod:8888. Отдельный LoadBalancer на порту 80 для приложения конфликтовал бы
+со встроенным Traefik.
 В Deployment должен быть публичный Docker Hub образ `wil42/playground:v1`.
 Открыть GitHub в браузере и показать публичность репозитория, логин в его имени,
 ветку `main` и файл `p3/gitops/deployment.yaml`.

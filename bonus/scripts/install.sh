@@ -104,7 +104,7 @@ if [[ -z "$project_json" || "$project_json" == "404 Project Not Found" ]]; then
 fi
 
 gitlab_repo_url="http://$GITLAB_RELEASE-webservice-default.gitlab.svc:8181/root/$GITLAB_PROJECT.git"
-for file in deployment.yaml service.yaml; do
+for file in deployment.yaml service.yaml ingress.yaml; do
     content=$(base64 < "$root_dir/../p3/gitops/$file" | tr -d '\n')
     payload=$(jq -n --arg branch main --arg commit "Bootstrap $file" \
         --arg path "gitops/$file" --arg content "$content" \
