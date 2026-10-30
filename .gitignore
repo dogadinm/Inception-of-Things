@@ -1,0 +1,6 @@
+.DS_Store
+**/.vagrant/
+**/.runtime/
+**/confs/lab.env
+*.box
+Intra Projects Inception-of-Things Edit.pdf

@@ -1,235 +1,232 @@
 # Part 3 — K3d и Argo CD
 
-## Цель Part 3
+## Что требуется по заданию
 
-В этой части Vagrant не используется. На уже доступной Linux-виртуальной
-машине создаётся локальный Kubernetes-кластер K3d, а Argo CD управляет
-приложением из публичного GitHub-репозитория.
+В p3 Vagrant не используется. В Linux VM запускаются Docker и кластер K3d
+(K3s внутри контейнеров Docker). Argo CD автоматически разворачивает приложение
+из публичного GitHub-репозитория.
 
-Конфигурация соответствует требованиям задания:
+- Namespace `argocd` содержит Argo CD, namespace `dev` — приложение.
+- Используется образ Docker Hub `wil42/playground`, версии `v1` и `v2`.
+- Приложение доступно на http://localhost:8888/.
+- На защите нужно изменить тег в Git, сделать commit/push и показать обновление
+  через Argo CD. Простое изменение Deployment командой kubectl этого не заменяет.
+- Имя GitHub-репозитория должно содержать школьный логин участника.
 
-- namespace `argocd` предназначен для Argo CD;
-- namespace `dev` содержит приложение;
-- приложение использует публичный образ `wil42/playground`;
-- доступны версии образа `v1` и `v2`;
-- версия меняется в GitHub, после чего Argo CD автоматически синхронизирует
-  Deployment;
-- приложение доступно на `http://localhost:8888/`.
+K3s — дистрибутив Kubernetes; K3d запускает K3s в Docker. Namespace разделяет
+ресурсы внутри кластера, pod запускает контейнеры приложения. Argo CD сравнивает
+Git с кластером и применяет изменения автоматически (`automated`), исправляет
+ручные отклонения (`selfHeal`) и удаляет удалённые из Git ресурсы (`prune`).
 
-### K3s и K3d
+## Подготовка
 
-K3s — лёгкая дистрибуция Kubernetes. В Part 2 она запускалась непосредственно
-в гостевой системе как systemd-сервис и управляла контейнерами на этой машине.
+Поддерживаются Linux x86_64 с apt-get, dnf или pacman, systemd, sudo и интернетом.
+Перед запуском остановить VM p1/p2, чтобы освободить память. На защите использовать
+среду, требуемую subject/eval sheet; локальный запуск на Arch проверяет работу.
 
-K3d не является другой реализацией Kubernetes. Это инструмент, который
-запускает K3s внутри Docker-контейнеров. Поэтому в Part 3:
+В публичном GitHub-репозитории должен быть путь `p3/gitops`, содержащий
+`deployment.yaml` и `service.yaml`. Репозиторий может содержать весь проект.
+SSH-доступ нужен для push; Argo CD читает публичный HTTPS URL без SSH-ключей.
+Не коммитить `.vagrant`, `.runtime`, `confs/lab.env`, пароли и eval sheet.
 
-1. Docker предоставляет контейнерный runtime;
-2. K3d создаёт server-, agent- и load balancer-контейнеры;
-3. Kubernetes API и workload работают внутри Docker-сети;
-4. проброс `8888:80` связывает порт хоста с load balancer K3d.
-
-Такой подход позволяет быстро создать и удалить учебный кластер без Vagrant.
-
-## Обязательная подготовка GitHub
-
-По условию нужен **public GitHub repository**, в имени которого присутствует
-логин участника группы. Например:
-
-```text
-https://github.com/mdogadin/inception-of-things-mdogadin.git
-```
-
-Репозиторий должен содержать каталог `p3/gitops` из этого проекта. После
-создания репозитория выполните в каталоге проекта:
-
-```sh
-git remote add p3-git https://github.com/USERNAME/REPOSITORY_WITH_LOGIN.git
-git push p3-git main
-```
-
-Если репозиторий уже содержит другую структуру, убедитесь, что в его корне
-есть именно `p3/gitops/deployment.yaml` и `p3/gitops/service.yaml`. Argo CD
-читает путь `p3/gitops`.
-
-Репозиторий обязан быть публичным, потому что в конфигурации не используются
-GitHub-токены или SSH-ключи. Не добавляйте секреты в Git.
-
-## Установка
-
-Скопируйте пример конфигурации:
+Команды ниже выполняются на Linux-машине, где работает Docker/K3d.
+Из корня репозитория:
 
 ```sh
 cd p3
 cp confs/lab.env.example confs/lab.env
+nano confs/lab.env
 ```
 
-Откройте `confs/lab.env` и установите URL своего public repository:
+Указать настоящий URL и логин. Пример после создания/переименования репозитория:
 
 ```sh
-GIT_REPO_URL=https://github.com/USERNAME/REPOSITORY_WITH_LOGIN.git
 GROUP_LOGIN=mdogadin
+GIT_REPO_URL=https://github.com/dogadinm/Inception-of-Things-mdogadin.git
 GIT_REPO_REVISION=main
 K3D_CLUSTER_NAME=iot
 K3D_VERSION=v5.8.3
 ARGOCD_VERSION=v3.1.8
+K3S_VERSION=v1.32.5-k3s1
+KUBECTL_VERSION=v1.32.5
 ```
 
-Затем запустите установку:
+Пример URL не создаёт репозиторий: сначала проверить его существование
+и публичность. Если имя не содержит `GROUP_LOGIN`, установщик завершится
+с объяснением: это проверяемый пункт задания.
+
+## Установка и запуск
+
+Из `p3`:
 
 ```sh
-sudo ./scripts/install.sh
+sudo bash scripts/install.sh
 ```
 
-Скрипт:
+Установщик ставит инструменты, запускает Docker, создаёт кластер с server,
+agent и load balancer, namespaces, Argo CD и Application `playground`.
+Версии K3s и kubectl зафиксированы в одном minor, чтобы избежать несовместимости.
+Он ожидает готовности Argo CD и синхронизации приложения, затем сохраняет
+пользовательский kubeconfig отдельным файлом, не заменяя существующий config.
 
-1. устанавливает Docker, `curl`, `git`, `k3d`, `kubectl` и Argo CD CLI;
-2. запускает Docker;
-3. создаёт K3d-кластер `iot` с одним agent и load balancer;
-4. пробрасывает порт host `8888` на HTTP-порт load balancer;
-5. устанавливает Argo CD из официального manifest;
-6. создаёт namespaces `argocd` и `dev`;
-7. регистрирует Argo CD Application `playground`;
-8. ждёт состояния `Synced Healthy` и готовности Deployment.
-
-Поддерживаются системы с `dnf` (AlmaLinux/RHEL-подобные) и `apt-get`
-(Debian/Ubuntu). В учебной AlmaLinux VM Docker устанавливается из
-официального Docker CE repository.
-
-После установки откройте новую shell-сессию или задайте kubeconfig:
+Если пользователь только что добавлен в группу docker, выйти из сеанса Linux
+и войти снова, чтобы применилось членство в группе. Затем:
 
 ```sh
-export KUBECONFIG="$(k3d kubeconfig write iot)"
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+bash scripts/check.sh iot v1
 ```
 
-Проверка:
+Если кластер уже установлен, повторный запуск после остановки Docker/кластера:
 
 ```sh
-./scripts/check.sh
+sudo systemctl start docker
+k3d cluster start iot
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+bash scripts/check.sh
 ```
 
-Ожидаемый ответ приложения:
+Если установка выполнялась вручную и отдельного kubeconfig ещё нет:
 
 ```sh
-curl http://localhost:8888/
+k3d kubeconfig get iot > "$HOME/.kube/iot.yaml"
+chmod 600 "$HOME/.kube/iot.yaml"
+export KUBECONFIG="$HOME/.kube/iot.yaml"
 ```
 
-Для версии `v1` ожидается JSON с `"message": "v1"`.
+## Показ на защите: Configuration
 
-## Как работает GitOps
-
-В [deployment.yaml](./gitops/deployment.yaml) указано:
-
-```yaml
-image: wil42/playground:v1
-```
-
-Argo CD Application из [шаблона](./confs/argocd-application.yaml.tpl)
-наблюдает GitHub-репозиторий и путь `p3/gitops`. Его автоматическая политика
-делает две вещи:
-
-- `automated` применяет изменения из Git;
-- `selfHeal` возвращает кластер к состоянию из Git, если ресурс изменили
-  вручную.
-
-Для демонстрации обновления выполните в локальной копии GitOps-репозитория:
+Из `p3` показать файлы и объекты:
 
 ```sh
-./scripts/update-version.sh v2
-git add gitops/deployment.yaml
+cat confs/lab.env.example
+cat confs/argocd-application.yaml.tpl
+cat gitops/deployment.yaml
+cat gitops/service.yaml
+k3d cluster list
+docker ps
+kubectl get nodes -o wide
+kubectl get namespaces argocd dev
+kubectl -n argocd get pods
+kubectl -n dev get deployments,pods,services
+kubectl -n argocd get application playground
+```
+
+Ожидается кластер `iot`, узлы Ready, namespaces Active, pod приложения Running,
+Deployment `wil-playground` 1/1, Application `Synced` и `Healthy`.
+В Deployment должен быть публичный Docker Hub образ `wil42/playground:v1`.
+Открыть GitHub в браузере и показать публичность репозитория, логин в его имени,
+ветку `main` и файл `p3/gitops/deployment.yaml`.
+
+### Открыть Argo CD в браузере
+
+В отдельном терминале, который оставить работающим:
+
+```sh
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+kubectl -n argocd port-forward --address 127.0.0.1 svc/argocd-server 8080:443
+```
+
+Открыть https://localhost:8080/. Сертификат лаборатории самоподписанный.
+Логин `admin`. Пароль получить в другом терминале:
+
+```sh
+export KUBECONFIG="$HOME/.kube/iot.yaml"
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 --decode
+printf '\n'
+```
+
+Пароль не добавлять в Git. В интерфейсе открыть Application `playground`:
+показать Repository URL, путь `p3/gitops`, ветку, commit SHA, Sync Status,
+Health и дерево Deployment → ReplicaSet → Pod / Service.
+При запуске внутри VM браузер должен быть в той же VM; localhost относится
+к машине, где запущен port-forward.
+
+## Показ на защите: Usage — v1 → v2 через GitHub
+
+### 1. Показать v1
+
+```sh
+curl -f http://localhost:8888/
+kubectl -n dev get deployment wil-playground -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+```
+
+Ожидается `{"status":"ok", "message":"v1"}` и образ `wil42/playground:v1`.
+Если после предыдущей проверки оставлена v2, сначала таким же способом
+ниже вернуть v1, commit/push, дождаться синхронизации и только затем показывать v2.
+
+### 2. Изменить только файл Deployment и отправить в GitHub
+
+Из каталога `p3`:
+
+```sh
+bash scripts/update-version.sh v2
+git diff -- gitops/deployment.yaml
+git add -- gitops/deployment.yaml
+git diff --cached --name-only
 git commit -m "Update playground to v2"
 git push origin main
 ```
 
-Скрипт изменяет только тег образа. После push Argo CD обнаружит новый commit:
+Перед commit проверить список staged: для демонстрации версии там должен быть
+только `p3/gitops/deployment.yaml`. Не использовать `git add .`.
+`git remote -v` должен указывать на репозиторий, который читает Argo CD.
+
+### 3. Дождаться автоматического обновления
+
+В Argo CD наблюдать новый commit и переход к `Synced / Healthy`.
+Проверять в терминале (Ctrl+C завершает наблюдение):
 
 ```sh
-export KUBECONFIG="$(k3d kubeconfig write iot)"
-kubectl -n argocd get application playground
-kubectl -n dev get deployment,pods
+kubectl -n argocd get application playground -w
 ```
 
-Дождитесь `Synced` и `Healthy`, затем:
+Argo CD опрашивает Git периодически; обновление может занять несколько минут.
+Если проверяющий просит обновить сведения о Git немедленно:
 
 ```sh
-curl http://localhost:8888/
+kubectl -n argocd annotate application playground argocd.argoproj.io/refresh=hard --overwrite
 ```
 
-Ответ должен содержать `"message": "v2"`. Это и есть требуемая проверка
-изменения версии через GitHub.
+Эта команда обновляет сведения о Git, а применение выполняет автоматическая
+политика Argo CD. В интерфейсе также доступны Refresh и, если требуется
+проверочным листом, Sync.
 
-Для ручной демонстрации состояния Argo CD можно использовать:
+### 4. Подтвердить v2
 
 ```sh
-argocd app get playground --core
-argocd app sync playground --core
+kubectl -n argocd get application playground -o jsonpath='{.status.sync.revision}{" "}{.status.sync.status}{" "}{.status.health.status}{"\n"}'
+git rev-parse HEAD
+kubectl -n dev rollout status deployment/wil-playground --timeout=180s
+kubectl -n dev get deployment wil-playground -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+curl -f http://localhost:8888/
+bash scripts/check.sh iot v2
 ```
 
-Опция `--core` подключает CLI напрямую к Kubernetes API и не требует
-отдельного ingress или пароля Argo CD.
+SHA Argo CD должен соответствовать отправленному коммиту. Образ —
+`wil42/playground:v2`, HTTP-ответ содержит `"message":"v2"`.
+Rollout сам по себе не доказывает обновление: всегда сверять SHA, тег и ответ.
 
-## Проверка объектов Kubernetes
+## Остановка, диагностика
 
 ```sh
-kubectl get ns
-kubectl -n argocd get pods
-kubectl -n argocd get application playground
-kubectl -n dev get pods,deployments,services
-kubectl -n dev describe deployment wil-playground
+k3d cluster stop iot
 ```
 
-Должны существовать:
-
-- namespaces `argocd` и `dev`;
-- Application `playground` в namespace `argocd`;
-- Deployment и Service `wil-playground` в namespace `dev`;
-- один Ready pod приложения;
-- image `wil42/playground:v1` или `wil42/playground:v2`.
-
-## Диагностика
+Для диагностики:
 
 ```sh
-k3d cluster list
-docker ps
-kubectl -n argocd get pods
 kubectl -n argocd describe application playground
+kubectl -n argocd logs deploy/argocd-repo-server --tail=60
 kubectl -n dev describe pod -l app.kubernetes.io/name=wil-playground
-kubectl -n argocd logs deploy/argocd-server
+kubectl -n dev get events --sort-by=.lastTimestamp
 ```
 
-- `ImagePullBackOff`: проверьте интернет и точность image tag.
-- `OutOfSync`: проверьте public repository, branch и путь `p3/gitops`.
-- `Unknown` или `Connection refused`: проверьте `KUBECONFIG` и работающий
-  Docker daemon.
-- Argo CD не видит новый commit: убедитесь, что commit действительно pushed,
-  branch совпадает с `GIT_REPO_REVISION`, а GitHub repository public.
-- `curl` не подключается: проверьте, что кластер создан с
-  `--port "8888:80@loadbalancer"` и порт 8888 не занят.
-
-## Удаление
-
-Удалить весь кластер можно без изменения системы:
+`ImagePullBackOff`: проверить Docker Hub и сеть. `OutOfSync`/`Unknown`: URL,
+публичность, ветку и путь в Git. Отказ на порту 8888: проверить Docker,
+кластер и ServiceLB. Отказ на 8080: проверить процесс port-forward.
+Для синтаксической проверки всех скриптов:
 
 ```sh
-k3d cluster delete iot
+for script in scripts/*.sh; do bash -n "$script" || break; done
 ```
-
-Docker, kubectl и Argo CD CLI при этом останутся установленными. Для полного
-удаления Docker используйте штатный пакетный менеджер целевой ОС.
-
-## Локальная проверка файлов
-
-На машине без Kubernetes можно проверить синтаксис:
-
-```sh
-bash -n scripts/install.sh scripts/check.sh scripts/update-version.sh
-```
-
-Манифесты можно проверить после установки `kubectl`:
-
-```sh
-kubectl apply --dry-run=client -f gitops/
-```
-
-Полную проверку выполняет `./scripts/check.sh` внутри Linux-машины с Docker и
-K3d.
