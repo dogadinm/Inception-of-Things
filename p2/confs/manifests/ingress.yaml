@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: iot
+  namespace: iot
+spec:
+  ingressClassName: traefik
+  defaultBackend:
+    service:
+      name: app3
+      port:
+        number: 80
+  rules:
+    - host: app1.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app1
+                port:
+                  number: 80
+    - host: app2.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app2
+                port:
+                  number: 80
+    # Traefik needs a hostless route to handle unmatched Host headers.
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app3
+                port:
+                  number: 80

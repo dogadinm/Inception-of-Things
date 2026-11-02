@@ -51,7 +51,7 @@ VirtualBox отображает VM с префиксом `p2-`, чтобы со�
 ```
 
 Скрипт проверяет Linux x86_64, наличие Vagrant и VirtualBox, валидирует
-Vagrantfile, создаёт VM, передаёт в неё `apps.yaml` по SSH и запускает
+Vagrantfile, создаёт VM, передаёт в неё файлы из `confs/manifests` по SSH и запускает
 проверку. Первый запуск занимает больше времени: скачиваются box, пакеты K3s
 и контейнерный образ.
 
@@ -87,7 +87,11 @@ vagrant destroy
 ```sh
 cat Vagrantfile
 cat confs/lab.yml
-cat confs/apps.yaml
+cat confs/manifests/namespace.yaml
+cat confs/manifests/app1.yaml
+cat confs/manifests/app2.yaml
+cat confs/manifests/app3.yaml
+cat confs/manifests/ingress.yaml
 vagrant validate
 vagrant status
 ```
@@ -112,7 +116,10 @@ ip -4 a
 sudo systemctl status k3s --no-pager
 kubectl get nodes -o wide
 kubectl -n iot get all
+kubectl -n iot get deployments
+kubectl -n iot get replicasets
 kubectl -n iot get pods -o wide
+kubectl -n iot get pods -l app=app2
 kubectl -n iot get deployment app2
 kubectl -n iot get deployment app2 -o jsonpath='{.spec.replicas}{"\n"}'
 kubectl -n iot get ingress
@@ -133,6 +140,39 @@ kubectl -n iot describe ingress iot
 Приложения находятся в namespace `iot`, поэтому нужен флаг `-n iot`.
 Объяснить, как Deployment управляет репликами, Service направляет трафик
 к pod, а Ingress выбирает Service по Host запроса.
+
+### Дополнительно: восстановление pod — внутри VM
+
+Deployment описывает желаемую версию и количество экземпляров приложения.
+Он управляет ReplicaSet, который поддерживает нужное число pod:
+
+```text
+Deployment app2 → ReplicaSet → три pod с меткой app=app2
+```
+
+Посмотреть объекты:
+
+```sh
+kubectl -n iot get deployments
+kubectl -n iot get replicasets
+kubectl -n iot get pods -l app=app2
+```
+
+У Deployment app2 ожидается READY `3/3`. У активного ReplicaSet app2:
+DESIRED `3`, CURRENT `3`, READY `3`. После обновлений могут сохраняться
+старые ReplicaSet с нулём pod — это история для возможного отката.
+
+Скопировать полное имя одного pod app2 и подставить вместо `ИМЯ_POD`:
+
+```sh
+kubectl -n iot delete pod ИМЯ_POD
+kubectl -n iot get pods -l app=app2 -w
+```
+
+ReplicaSet создаст замену с новым именем. Временно могут одновременно
+отображаться старый pod Terminating и новый запускающийся pod.
+Дождаться трёх готовых pod и нажать Ctrl+C для завершения наблюдения.
+Это дополнительный учебный эксперимент, а не обязательный пункт eval sheet.
 
 Выйти на хост:
 
@@ -255,9 +295,10 @@ bash scripts/check.sh
 ### Vagrant и provisioning
 
 `Vagrantfile` использует тот же официальный AlmaLinux box, что и `p1`, но
-описывает только одну VM. Общие папки отключены, поэтому `apps.yaml`
-передаётся отдельным Vagrant file provisioner в `/tmp`. Это не оставляет
-зависимости от каталога репозитория внутри гостя.
+описывает только одну VM. Общие папки отключены, поэтому каждый манифест
+передаётся Vagrant file provisioner по SSH в `/tmp/iot-<имя>.yaml`.
+После применения временные файлы удаляются. Это не оставляет зависимости
+от каталога репозитория внутри гостя.
 
 `scripts/provision.sh`:
 
@@ -268,13 +309,32 @@ bash scripts/check.sh
 4. определяет интерфейс с адресом `192.168.56.110`, не предполагая имя
    `eth1`;
 5. устанавливает зафиксированную версию K3s и ждёт готовности API;
-6. применяет манифесты, ждёт rollout всех Deployment и настраивает kubeconfig
+6. сначала создаёт namespace, затем применяет приложения и Ingress,
+   ждёт rollout всех Deployment и настраивает kubeconfig
    пользователя `vagrant`.
+
+Во время provisioning команды `kubectl` используют административный
+`/etc/rancher/k3s/k3s.yaml`. Пользовательский kubeconfig настраивается отдельно,
+поэтому повторная настройка не зависит от переменных login-оболочки root.
 
 ### Kubernetes-манифесты
 
-`confs/apps.yaml` содержит namespace `iot`, три ConfigMap с HTML-страницами,
-три Deployment, три ClusterIP Service и один Ingress.
+Манифесты разделены по приложениям:
+
+```text
+confs/
+├── lab.yml
+└── manifests/
+    ├── namespace.yaml  # Namespace iot
+    ├── app1.yaml       # ConfigMap + Deployment + Service app1
+    ├── app2.yaml       # ConfigMap + Deployment + Service app2
+    ├── app3.yaml       # ConfigMap + Deployment + Service app3
+    └── ingress.yaml    # Правила маршрутизации Traefik
+```
+
+В каждом файле приложения три отдельных объекта разделены строкой `---`.
+Связи между объектами задаются именами и метками, а не расположением в файлах.
+Namespace применяется первым, потому что остальные объекты создаются внутри него.
 
 ConfigMap монтируется в `index.html` контейнера nginx через `subPath`, поэтому
 приложения различимы при проверке. Service скрывает pod-адреса и даёт

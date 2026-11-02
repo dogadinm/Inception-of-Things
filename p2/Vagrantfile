@@ -35,7 +35,11 @@ Vagrant.configure("2") do |config|
       vb.cpus = lab.fetch("cpus")
       vb.memory = lab.fetch("server_memory")
     end
-    machine.vm.provision "file", source: "confs/apps.yaml", destination: "/tmp/iot-apps.yaml"
+    %w[namespace app1 app2 app3 ingress].each do |manifest|
+      machine.vm.provision "file",
+        source: "confs/manifests/#{manifest}.yaml",
+        destination: "/tmp/iot-#{manifest}.yaml"
+    end
     machine.vm.provision "shell", path: "scripts/provision.sh",
       args: ["192.168.56.110", "#{login}s", lab.fetch("k3s_version")],
       privileged: true
