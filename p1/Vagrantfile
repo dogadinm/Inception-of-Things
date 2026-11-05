@@ -54,6 +54,7 @@ Vagrant.configure("2") do |config|
         vb.gui = false
         vb.cpus = lab.fetch("cpus")
         vb.memory = node[:memory]
+        vb.customize ["modifyvm", :id, "--paravirt-provider", "none"]
       end
 
       machine.vm.provision "file", source: token, destination: "/tmp/iot-cluster-token"

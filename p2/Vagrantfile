@@ -34,6 +34,7 @@ Vagrant.configure("2") do |config|
       vb.gui = false
       vb.cpus = lab.fetch("cpus")
       vb.memory = lab.fetch("server_memory")
+      vb.customize ["modifyvm", :id, "--paravirt-provider", "none"]
     end
     %w[namespace app1 app2 app3 ingress].each do |manifest|
       machine.vm.provision "file",
