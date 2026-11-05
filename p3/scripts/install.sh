@@ -51,7 +51,7 @@ repo_name=${repo_name%.git}
 }
 
 if command -v dnf >/dev/null 2>&1; then
-    dnf install -y ca-certificates curl git
+    dnf install -y ca-certificates curl git jq
     if ! command -v docker >/dev/null 2>&1; then
         dnf install -y dnf-plugins-core
         dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
@@ -59,9 +59,9 @@ if command -v dnf >/dev/null 2>&1; then
     fi
 elif command -v apt-get >/dev/null 2>&1; then
     apt-get update
-    apt-get install -y ca-certificates curl git docker.io
+    apt-get install -y ca-certificates curl git jq docker.io
 elif command -v pacman >/dev/null 2>&1; then
-    pacman -S --needed --noconfirm ca-certificates curl git docker
+    pacman -S --needed --noconfirm ca-certificates curl git jq docker
 else
     echo "Unsupported distribution: expected dnf, apt-get or pacman." >&2
     exit 1

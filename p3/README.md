@@ -73,17 +73,19 @@ Open `playground`: explain its Git source, commit and resource tree.
 
 ## Demonstrate v1 → v2
 
-Start with v1. If currently on v2, use the change/commit/push sequence below with
-`v1` first and wait for the v1 response.
+Start with v1. If currently on v2, edit `gitops/deployment.yaml` to use
+`wil42/playground:v1`, commit/push as below, and wait for the v1 response.
 
 ```bash
 curl -f http://localhost:8888/
 ```
 
-Expected: `{"status":"ok", "message":"v1"}`. Then update through GitHub:
+Expected: `{"status":"ok", "message":"v1"}`. In the editor below, change
+`image: wil42/playground:v1` to `image: wil42/playground:v2`, save and exit.
+Then commit and push through GitHub:
 
 ```bash
-bash scripts/update-version.sh v2
+nano gitops/deployment.yaml
 git diff -- gitops/deployment.yaml
 git remote -v
 git add -- gitops/deployment.yaml
@@ -120,7 +122,6 @@ and response containing `"message":"v2"`.
 | `gitops/deployment.yaml` | Image, replicas, Pod labels and health checks |
 | `gitops/service.yaml` | Select ready Pods; port 80 → Pod port 8888 |
 | `gitops/ingress.yaml` | Traefik routing rules |
-| `scripts/update-version.sh` | Change local image tag |
 | `scripts/check.sh` | Check cluster, Argo CD and HTTP response |
 
 K3d runs K3s nodes inside Docker. A namespace groups objects; a Pod runs containers

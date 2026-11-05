@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+# A login shell may inherit the SSH user's kubeconfig during reprovisioning.
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
 role=${1:?Missing role}
 node_ip=${2:?Missing node IP}
