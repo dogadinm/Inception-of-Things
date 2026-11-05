@@ -47,8 +47,8 @@ then install the bonus in the same cluster and repeat using local GitLab.
 
 - Clone the submitted repository into an empty directory on the required machine.
 - The public GitHub repository **name must contain a member's school login**.
-  The current name `Inception-of-Things` does not meet that requirement. After
-  renaming, update the Git remote, `p3/confs/lab.env` and the Argo CD source.
+  This repository is `Inception-of-Things-mdogadin`. Keep the Git remote,
+  `p3/confs/lab.env` and the Argo CD source pointed at its current URL.
 - Verify the latest stable OS and GitLab versions before the defense.
 - Start the application at v1, then demonstrate a committed v2 change and its
   HTTP response. Use GitHub for p3 and local GitLab for the bonus.

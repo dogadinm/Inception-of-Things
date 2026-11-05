@@ -3,8 +3,8 @@
 Run commands from **`p3/`**, on the Linux machine running Docker.
 For defense, use the 42 VM required by the evaluation sheet.
 The public GitHub repository **name must contain a member's school login**;
-`Inception-of-Things` needs renaming before defense. Update the Git remote and
-`confs/lab.env` after renaming.
+the current name `Inception-of-Things-mdogadin` satisfies this requirement.
+Use its current URL in the Git remote, `confs/lab.env` and the Application source.
 
 ## Start
 
